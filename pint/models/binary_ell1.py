@@ -12,10 +12,10 @@ import astropy.units as u
 from warnings import warn
 
 class BinaryELL1(PulsarBinary):
-    """This is a PINT pulsar binary ELL1 model class a subclass of PSRbinaryWapper.
-    It is a wrapper for independent ELL1model class defined in ./pulsar_binary/ELL1_model.py
-    All the detailed calculations are in the independent ELL1model.
-    The aim for this class is to connect the independent binary model with PINT platform
+    """This is a PINT pulsar binary ELL1 model class a subclass of PulsarBinary.
+    It is a wrapper for stand alone ELL1model class defined in ./pulsar_binary/ELL1_model.py
+    All the detailed calculations are in the stand alone ELL1model.
+    The aim for this class is to connect the stand alone binary model with PINT platform
     ELL1model special parameters:
     TASC Epoch of ascending node
     EPS1 First Laplace-Lagrange parameter, ECC x sin(OM) for ELL1 model
@@ -41,11 +41,11 @@ class BinaryELL1(PulsarBinary):
              description="Second Laplace-Lagrange parameter, ECC x cos(OM) for ELL1 model",
              long_double = True), binary_param = True)
 
-        self.add_param(p.floatParameter(name="EPS1DOT", units="",
+        self.add_param(p.floatParameter(name="EPS1DOT", units="1e-12/s",
              description="First derivative of first Laplace-Lagrange parameter",
              long_double = True), binary_param = True)
 
-        self.add_param(p.floatParameter(name="EPS2DOT", units="",
+        self.add_param(p.floatParameter(name="EPS2DOT", units="1e-12/s",
              description="Second derivative of first Laplace-Lagrange parameter",
              long_double = True), binary_param = True)
 
