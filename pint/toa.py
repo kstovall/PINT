@@ -2,8 +2,8 @@ import re, sys, os, cPickle, numpy, gzip
 from . import utils
 from . import observatories as obsmod
 from . import erfautils
-import spice
 import astropy.time as time
+from . import pulsar_mjd
 import astropy.table as table
 import astropy.units as u
 from astropy.coordinates import EarthLocation
@@ -11,7 +11,7 @@ try:
     from astropy.erfa import DAYSEC as SECS_PER_DAY
 except ImportError:
     from astropy._erfa import DAYSEC as SECS_PER_DAY
-from spiceutils import objPosVel, load_kernels
+from solar_system_ephemerides import objPosVel
 from pint import ls, J2000, J2000ld
 from .config import datapath
 from astropy import log
@@ -26,14 +26,22 @@ iers_a_file = None
 iers_a = None
 
 
-def get_TOAs(timfile, ephem="DE421", planets=False, usepickle=True):
+def get_TOAs(timfile, ephem="DE421", planets=False, usepickle=False):
     """Convenience function to load and prepare TOAs for PINT use.
 
     Loads TOAs from a '.tim' file, applies clock corrections, computes
     key values (like TDB), computes the observatory position and velocity
-    vectors, and pickles the file for later use.
+    vectors, and pickles the file for later use (if requested).
     """
-    t = TOAs(timfile,usepickle=usepickle)
+    updatepickle = False
+    if usepickle:
+        picklefile = _check_pickle(timfile)
+        if picklefile:
+            timfile = picklefile
+        else:
+            # Pickle either did not exist or is out of date
+            updatepickle = True
+    t = TOAs(timfile)
     if not any([f.has_key('clkcorr') for f in t.table['flags']]):
         log.info("Applying clock corrections.")
         t.apply_clock_corrections()
@@ -43,14 +51,44 @@ def get_TOAs(timfile, ephem="DE421", planets=False, usepickle=True):
     if 'ssb_obs_pos' not in t.table.colnames:
         log.info("Computing observatory positions and velocities.")
         t.compute_posvels(ephem, planets)
-    # This should also check if the timfile is newer than the pickle file
-    # and update the pickle in that case
-    if not (os.path.isfile(timfile+".pickle") or
-            os.path.isfile(timfile+".pickle.gz")):
+    # Update pickle if needed:
+    if usepickle and updatepickle:
         log.info("Pickling TOAs.")
         t.pickle()
     return t
 
+def _check_pickle(toafilename, picklefilename=None):
+    """Checks if pickle file for the given toafilename needs to be updated.
+    Currently only file modification times are compared, note this will
+    give misleading results under some circumstances.
+
+    If picklefilename is not specified, will look for (toafilename).pickle.gz
+    then (toafilename).pickle.
+
+    If the pickle exists and is up to date, returns the pickle file name.
+    Otherwise returns empty string.
+    """
+    if picklefilename is None:
+        for ext in (".pickle.gz", ".pickle"):
+            testfilename = toafilename + ext
+            if os.path.isfile(testfilename):
+                picklefilename = testfilename
+                break
+        # It it's still None, no pickles were found
+        if picklefilename is None:
+            return ''
+
+    # Check if TOA is newer than pickle
+    if os.path.getmtime(picklefilename) < os.path.getmtime(toafilename):
+        return ''
+
+    # TODO add more tests.  Some things to consider:
+    #   1. Check file contents via md5sum (will require storing this in pickle).
+    #   2. Check INCLUDEd TOA files (will require some TOA file parsing).
+
+    # All checks passed, return name of pickle.
+    return picklefilename
+        
 def get_TOAs_list(toa_list,ephem="DE421", planets=False):
     """Load TOAs from a list of TOA objects.
 
@@ -263,14 +301,15 @@ class TOA(object):
         Time object passed to the TOA constructor.
 
         """
+        fmt='pulsar_mjd'
         if obs == "Barycenter":
             # Barycenter overrides the scale argument with 'tdb' always.
             if numpy.isscalar(MJD):
-                self.mjd = time.Time(MJD, scale='tdb', format='mjd',
+                self.mjd = time.Time(MJD, scale='tdb', format=fmt,
                                     precision=9)
             else:
                 self.mjd = time.Time(MJD[0], MJD[1],
-                                    scale='tdb', format='mjd',
+                                    scale='tdb', format=fmt,
                                     precision=9)
         elif obs == "Geocenter":
             # Warning(paulr): The location is used in the TT->TDB
@@ -280,13 +319,13 @@ class TOA(object):
             # Certainly (0,0,0) is the right answer for the solar system
             # delays and such.
             if numpy.isscalar(MJD):
-                self.mjd = time.Time(MJD, scale=scale, format='mjd',
+                self.mjd = time.Time(MJD, scale=scale, format=fmt,
                                     location=EarthLocation(0.0,0.0,0.0),
                                     precision=9)
             else:
                 self.mjd = time.Time(MJD[0], MJD[1],
                                     location=EarthLocation(0.0,0.0,0.0),
-                                    scale=scale, format='mjd',
+                                    scale=scale, format=fmt,
                                     precision=9)
         elif obs == "Spacecraft":
             # For TOAs from a spacecraft, a gcrslocation argument is
@@ -300,11 +339,11 @@ class TOA(object):
             if not isinstance(kwargs['gcrslocation'],coord.GCRS):
                 raise ValueError("gcrslocation must be an astropy.coordinates.GCRS instance")
             if numpy.isscalar(MJD):
-                self.mjd = time.Time(MJD, scale=scale, format='mjd',
+                self.mjd = time.Time(MJD, scale=scale, format=fmt,
                                     precision=9)
             else:
                 self.mjd = time.Time(MJD[0], MJD[1],
-                                    scale=scale, format='mjd',
+                                    scale=scale, format=fmt,
                                     precision=9)
         elif obs in observatories:
             # Not sure what I was trying to test for with this. -- paulr
@@ -317,12 +356,12 @@ class TOA(object):
                     log.warning('TOA passed with poor precision ({0})'.format(self.mjd.precision))
                 self.mjd.precision = 9
             elif numpy.isscalar(MJD):
-                self.mjd = time.Time(MJD, scale=scale, format='mjd',
+                self.mjd = time.Time(MJD, scale=scale, format=fmt,
                                     location=observatories[obs].loc,
                                     precision=9)
             else:
                 self.mjd = time.Time(MJD[0], MJD[1],
-                                    scale=scale, format='mjd',
+                                    scale=scale, format=fmt,
                                     location=observatories[obs].loc,
                                     precision=9)
         else:
@@ -353,7 +392,7 @@ class TOA(object):
 class TOAs(object):
     """A class of multiple TOAs, loaded from zero or more files."""
 
-    def __init__(self, toafile=None, toalist=None, usepickle=True):
+    def __init__(self, toafile=None, toalist=None):
         # First, just make an empty container
         self.toas = []
         self.commands = []
@@ -363,22 +402,19 @@ class TOAs(object):
 
         if (toalist is not None) and (toafile is not None):
             log.error('Can not initialize TOAs from both file and list')
+
         if toafile is not None:
+            
             # FIXME: work with file-like objects as well
 
-            if type(toafile) in [tuple, list]:
-                self.filename = None
-                for infile in toafile:
-                    self.read_toa_file(infile, usepickle=usepickle)
+            # Check for a pickle-like filename.  Alternative approach would
+            # be to just try opening it as a pickle and see what happens.
+            if toafile.endswith('.pickle') or toafile.endswith('pickle.gz'):
+                self.read_pickle_file(toafile)
+
+            # Not a pickle file, process as a standard set of TOA lines
             else:
-                pth, ext = os.path.splitext(toafile)
-                if ext == ".pickle":
-                    toafile = pth
-                elif ext == ".gz":
-                    pth0, ext0 = os.path.splitext(pth)
-                    if ext0 == ".pickle":
-                        toafile = pth0
-                self.read_toa_file(toafile, usepickle=usepickle)
+                self.read_toa_file(toafile)
                 self.filename = toafile
 
         if toalist is not None:
@@ -707,10 +743,9 @@ class TOAs(object):
                 log.info('Column {0} already exists. Removing...'.format(name))
                 self.table.remove_column(name)
 
-        load_kernels(ephem)
         ephem_file = datapath("%s.bsp"%ephem.lower())
         log.info("Loading %s ephemeris." % ephem_file)
-        spice.furnsh(ephem_file)
+
         self.table.meta['ephem'] = ephem
         ssb_obs_pos = table.Column(name='ssb_obs_pos',
                                     data=numpy.zeros((self.ntoas, 3), dtype=numpy.float64),
@@ -728,55 +763,48 @@ class TOAs(object):
                 plan_poss[name] = table.Column(name=name,
                                     data=numpy.zeros((self.ntoas, 3), dtype=numpy.float64),
                                     unit=u.km, meta={'origin':'OBS', 'obj':p})
+
+        tdb = time.Time(self.table['tdbld'], scale='tdb', format='mjd')
         # Now step through in observatory groups
         for ii, key in enumerate(self.table.groups.keys):
             grp = self.table.groups[ii]
             obs = self.table.groups.keys[ii]['obs']
             loind, hiind = self.table.groups.indices[ii:ii+2]
             if (key['obs'] == 'Barycenter'):
-                for jj, grprow in enumerate(grp):
-                    ind = jj+loind
-                    et = float((grprow['tdbld'] - J2000ld) * SECS_PER_DAY)
-                    obs_sun = objPosVel("SSB", "SUN", et)
-                    obs_sun_pos[ind,:] = obs_sun.pos
+                obs_sun = objPosVel('ssb', 'earth', tdb[loind:hiind],ephem)
+                obs_sun_pos[loind:hiind,:] = obs_sun.pos.T
             elif (key['obs'] == 'Spacecraft'):
                 # For a time recorded at a spacecraft, use the position of
                 # the spacecraft recorded in the TOA to compute the needed
                 # vectors.
                 pass
             elif (key['obs'] == 'Geocenter'):
-                for jj, grprow in enumerate(grp):
-                    ind = jj+loind
-                    et = float((grprow['tdbld'] - J2000ld) * SECS_PER_DAY)
-                    ssb_earth = objPosVel("SSB", "EARTH", et)
-                    obs_sun = objPosVel("EARTH", "SUN", et)
-                    obs_sun_pos[ind,:] = obs_sun.pos
-                    ssb_obs = ssb_earth
-                    ssb_obs_pos[ind,:] = ssb_obs.pos
-                    ssb_obs_vel[ind,:] = ssb_obs.vel
-                    if planets:
-                        for p in ('jupiter', 'saturn', 'venus', 'uranus'):
-                            name = 'obs_'+p+'_pos'
-                            dest = p.upper()+" BARYCENTER"
-                            pv = objPosVel("EARTH", dest, et)
-                            plan_poss[name][ind,:] = pv.pos
+                ssb_earth = objPosVel("SSB", "EARTH", ttdb[loind:hiind],ephem)
+                obs_sun = objPosVel("EARTH", "SUN", ttdb[loind:hiind],ephem)
+                obs_sun_pos[loind:hiind,:] = obs_sun.pos.T
+                ssb_obs = ssb_earth
+                ssb_obs_pos[loind:hiind,:] = ssb_obs.pos.T
+                ssb_obs_vel[loind:hiind,:] = ssb_obs.vel.T
+                if planets:
+                    for p in ('jupiter', 'saturn', 'venus', 'uranus'):
+                        name = 'obs_'+p+'_pos'
+                        dest = p
+                        pv = objPosVel("EARTH", dest, tdb[loind:hiind],ephem)
+                        plan_poss[name][loind,hiind] = pv.pos
             elif (key['obs'] in observatories):
                 earth_obss = erfautils.topo_posvels(obs, grp)
-                for jj, grprow in enumerate(grp):
-                    ind = jj+loind
-                    et = float((grprow['tdbld'] - J2000ld) * SECS_PER_DAY)
-                    ssb_earth = objPosVel("SSB", "EARTH", et)
-                    obs_sun = objPosVel("EARTH", "SUN", et) - earth_obss[jj]
-                    obs_sun_pos[ind,:] = obs_sun.pos
-                    ssb_obs = ssb_earth + earth_obss[jj]
-                    ssb_obs_pos[ind,:] = ssb_obs.pos
-                    ssb_obs_vel[ind,:] = ssb_obs.vel
-                    if planets:
-                        for p in ('jupiter', 'saturn', 'venus', 'uranus'):
-                            name = 'obs_'+p+'_pos'
-                            dest = p.upper()+" BARYCENTER"
-                            pv = objPosVel("EARTH", dest, et) - earth_obss[jj]
-                            plan_poss[name][ind,:] = pv.pos
+                ssb_earth = objPosVel("SSB", "EARTH", tdb[loind:hiind],ephem)
+                obs_sun = objPosVel("EARTH", "SUN", tdb[loind:hiind],ephem) - earth_obss
+                obs_sun_pos[loind:hiind,:] = obs_sun.pos.T
+                ssb_obs = ssb_earth + earth_obss
+                ssb_obs_pos[loind:hiind,:] = ssb_obs.pos.T
+                ssb_obs_vel[loind:hiind,:] = ssb_obs.vel.T
+                if planets:
+                    for p in ('jupiter', 'saturn', 'venus', 'uranus'):
+                        name = 'obs_'+p+'_pos'
+                        dest = p
+                        pv = objPosVel("EARTH", dest, tdb[loind:hiind],ephem) - earth_obss
+                        plan_poss[name][loind:hiind,:] = pv.pos.T
             else:
                 log.error("Unknown observatory {0}".format(key['obs']))
         cols_to_add = [ssb_obs_pos, ssb_obs_vel, obs_sun_pos]
@@ -784,38 +812,35 @@ class TOAs(object):
             cols_to_add += plan_poss.values()
         self.table.add_columns(cols_to_add)
 
-    def read_toa_file(self, filename, process_includes=True, top=True, usepickle=True):
+    def read_pickle_file(self, filename):
+        """Read the TOAs from the pickle file specified in filename.  Note
+        the filename should include any pickle-specific extensions (ie 
+        ".pickle.gz" or similar), these will not be added automatically."""
+
+        log.info("Reading pickled TOAs from '%s'..." % filename)
+        if os.path.splitext(filename)[1] == '.gz':
+            infile = gzip.open(filename,'rb')
+        else:
+            infile = open(filename,'rb')
+        tmp = cPickle.load(infile)
+        self.filename = tmp.filename
+        if hasattr(tmp, 'toas'):
+            self.toas = tmp.toas
+        if hasattr(tmp, 'table'):
+            self.table = tmp.table.group_by("obs")
+        if hasattr(tmp, 'ntoas'):
+            self.ntoas = tmp.ntoas
+        self.commands = tmp.commands
+        self.observatories = tmp.observatories
+        self.last_MJD = tmp.last_MJD
+        self.first_MJD = tmp.first_MJD
+
+    def read_toa_file(self, filename, process_includes=True, top=True):
         """Read the given filename and return a list of TOA objects.
 
         Will process INCLUDEd files unless process_includes is False.
         """
         if top:
-            # Read from a pickle file if available
-            if usepickle and (os.path.isfile(filename+".pickle") or
-                              os.path.isfile(filename+".pickle.gz")):
-                ext = ".pickle.gz" if \
-                  os.path.isfile(filename+".pickle.gz") else ".pickle"
-                if (os.path.getmtime(filename+ext) >
-                    os.path.getmtime(filename)):
-                    log.info("Reading toas from '%s'..." % \
-                             (filename+ext))
-                    # Pickle file is newer, assume it is good and load it
-                    if ext==".pickle.gz":
-                        tmp = cPickle.load(gzip.open(filename+ext, 'rb'))
-                    else:
-                        tmp = cPickle.load(open(filename+ext, 'rb'))
-                    self.filename = tmp.filename
-                    if hasattr(tmp, 'toas'):
-                        self.toas = tmp.toas
-                    if hasattr(tmp, 'table'):
-                        self.table = tmp.table.group_by("obs")
-                    if hasattr(tmp, 'ntoas'):
-                        self.ntoas = tmp.ntoas
-                    self.commands = tmp.commands
-                    self.observatories = tmp.observatories
-                    self.last_MJD = tmp.last_MJD
-                    self.first_MJD = tmp.first_MJD
-                    return
             self.ntoas = 0
             self.toas = []
             self.commands = []
