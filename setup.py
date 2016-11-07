@@ -29,10 +29,10 @@ ext_modules = []
 
 if use_cython:
     print("Using cython...")
-    src = ["pint/str2ld/str2ld_py.pyx"]
+    src = ["pint/cutils/str2ld_py.pyx"]
 else:
     print("Using existing 'C' source file...")
-    src = ["pint/str2ld/str2ld_py.c"]
+    src = ["pint/cutils/str2ld_py.c"]
 
 ext_modules += [Extension("pint.str2ld", src,
                           include_dirs = [numpy.get_include(),],
@@ -40,7 +40,8 @@ ext_modules += [Extension("pint.str2ld", src,
 
 if use_cython:
     cmdclass.update({'build_ext': build_ext})
-
+# TODO: need to check if datafile have all the datafile inplace. We do not want
+# to download those files everytime we reinstall PINT
 # Download data files
 data_urls = [
         "ftp://ssd.jpl.nasa.gov/pub/eph/planets/bsp/de405.bsp",
@@ -71,10 +72,13 @@ setup(
         'pint.extern',
         'pint.models',
         'pint.models.stand_alone_psr_binaries',
+        'pint.observatory',
         'pint.orbital'],
 
-    package_data={'pint':['datafiles/observatories.txt',
-                          'datafiles/ecliptic.dat', ]+data_files},
+    package_data={'pint': [
+        'datafiles/ecliptic.dat', 
+        'datafiles/gps2utc.clk'
+        ] + data_files},
 
     cmdclass = cmdclass,
     ext_modules=ext_modules,
