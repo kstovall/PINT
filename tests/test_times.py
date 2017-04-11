@@ -16,7 +16,8 @@ log.setLevel('ERROR')
 ls = u.def_unit('ls', const.c * 1.0 * u.s)
 
 log.info("Reading TOAs into PINT")
-ts = toa.get_TOAs(datadir + "/testtimes.tim",usepickle=False)
+ts = toa.get_TOAs(datadir + "/testtimes.tim",
+                  include_bipm=False, usepickle=False)
 if log.level < 25:
     ts.print_summary()
 ts.table.sort('index')
@@ -39,7 +40,7 @@ goodlines = lines[1:]
 # Get the output lines from the TOAs
 for line, TOA in zip(goodlines, ts.table):
     assert len(line.split()) == 19, \
-      "tempo2 general2 does not support all needed outputs"
+        "tempo2 general2 does not support all needed outputs"
     oclk, gps_utc, tai_utc, tt_tai, ttcorr, tt2tb, \
           ep0, ep1, ep2, ev0, ev1, ev2, \
           tp0, tp1, tp2, tv0, tv1, tv2, Ttt = \
@@ -60,7 +61,7 @@ for line, TOA in zip(goodlines, ts.table):
              ((TOA['mjd'].tt - tempo_tt.tt).sec * u.s).to(u.ns).value)
 
     pint_opv = erfautils.topo_posvels(
-            Observatory.get(TOA['obs']).earth_location, 
+            Observatory.get(TOA['obs']).earth_location_itrf(),
             TOA, obsname=TOA['obs'])
     pint_opv = utils.PosVel(pint_opv.pos.T[0], pint_opv.vel.T[0])
     #print " obs  T2:", t2_opv.pos.to(u.m).value, t2_opv.vel.to(u.m/u.s)

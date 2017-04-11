@@ -14,12 +14,12 @@ class TestFD(unittest.TestCase):
         self.parf = 'test_FD.par'
         self.timf = 'test_FD.simulate.pint_corrected'
         self.FDm = mb.get_model(self.parf)
-        self.toas = toa.get_TOAs(self.timf)
+        self.toas = toa.get_TOAs(self.timf, include_bipm=False)
         # libstempo result
         self.ltres, self.ltbindelay = np.genfromtxt(self.parf + '.tempo_test', unpack=True)
     def test_FD(self):
-        print "Testing FD module."
-        rs = pint.residuals.resids(self.toas, self.FDm).time_resids.to(u.s).value
+        print("Testing FD module.")
+        rs = pint.residuals.resids(self.toas, self.FDm, False).time_resids.to(u.s).value
         resDiff = rs - self.ltres
         #NOTE : This prescision is a lower then 1e-7 seconds level, due to some
         # early parks clock corrections are treated differently.

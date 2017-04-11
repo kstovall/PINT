@@ -8,7 +8,10 @@ import astropy.time as time
 import numpy as np
 import pint.utils as utils
 import astropy.units as u
+from astropy.table import Table
 import copy
+import abc
+from six import add_metaclass
 
 # parameters or lines in parfiles to ignore (for now?), or at
 # least not to complain about
@@ -96,37 +99,68 @@ class Cache(object):
         return use_cached_results
 
 
-
-class TimingModel(object):
-    """Base-level object provids an interface for implementing pulsar timing
-    models. A timing model generally have the following parts:
-        Parameters
-        Delay/Phase functions
-        Derivatives of dealy and phase respect to parameter
-    In PINT, one timing model would be a subclass of `TimingModel` class. The
-    required parts has to be provided in order to compute the residuals and update
-    the model, in other words, fit the model.
-    Example code for developers:
-
-    import parameter as p
-    from .timing_model import TimingModel, MissingParameter
-
-    class MyModel(object):
-        def __init__(self):
-            super(MyModel, self).__init__()
-            self.add_param(p.floatParameter(name="F0", value=0.0, units="Hz",
-                           description="Spin-frequency", long_double=True))
-            self.delay_funcs += [self.MyModel_delay, ]
-        def setup(self):
-            super(MyModel, self).setup()
-
-        def MyModel_delay(self):
-            pass
-            return delay
-    To make it work with PINT model builder, The new component should be added
-    to the ComponentsList in the top of model_builder.py file. Note: In the future
-    this will be automaticly detected.
+class ModelMeta(abc.ABCMeta):
     """
+    This is a Meta class for timing model registeration. In order ot get a
+    timing model registered, a member called 'register' has to be set true in the
+    TimingModel subclass.
+    """
+    def __init__(cls, name, bases, dct):
+        regname = '_model_list'
+        if not hasattr(cls,regname):
+            setattr(cls,regname,{})
+        if 'register' in dct:
+            if cls.register:
+                getattr(cls,regname)[name] = cls
+        super(ModelMeta, cls).__init__(name, bases, dct)
+
+
+@add_metaclass(ModelMeta)
+class TimingModel(object):
+    """
+    Base-level object provides an interface for implementing pulsar timing
+    models. It contains several over all wrapper methods.
+
+    Notes
+    -----
+    PINT models pulsar pulse time of arrival at observer from its emission process and
+    propagation to observer. Emission generally modeled as pulse 'Phase' and propagation.
+    'time delay'. In pulsar timing different astrophysics phenomenons are separated to
+    time model components for handling a specific emission or propagation effect.
+
+    All timing model component classes should subclass this timing model base class.
+    Each timing model component generally requires the following parts:
+        Timing Parameters
+        Delay/Phase functions which implements the time delay and phase.
+        Derivatives of delay and phase respect to parameter for fitting toas.
+    Each timing parameters are stored as TimingModel attribute in the type of `pint.model.parameter`
+    delay or phase and its derivatives are implemented as TimingModel Methods.
+
+    Attributes
+    ----------
+    params : list
+        A list of all the parameter names.
+    prefix_params : list
+        A list of prefixed parameter names.
+    delay_funcs : dict
+        All the delay functions implemented in timing model. The delays do not
+        need barycentric toas are placed under the 'L1' keys as a list of methods,
+        the ones needs barycentric toas are under the 'L2' delay. This will be improved
+        in the future. One a delay method is defined in model component, it should
+        get registered in this dictionary.
+    phase_funcs : list
+        All the phase functions implemented in timing model. Once a phase method is defined
+        in model component, it should get registered in this list.
+    delay_derivs : list
+        All the delay derivatives respect to timing parameters.
+        Once a delay derivative method is defined in model component, it should get registered in this list.
+    phase_derivs : list
+        All the phase derivatives respect to timing parameters.
+        Once a phase derivative method is defined in model component, it should get registered in this list.
+    phase_derivs_wrt_delay : list
+        All the phase derivatives respect to delay.
+    """
+
     def __init__(self):
         self.params = []  # List of model parameter names
         self.prefix_params = []  # List of model parameter names
@@ -141,9 +175,15 @@ class TimingModel(object):
             description="Source name",
             aliases=["PSRJ", "PSRB"]))
         self.model_type = None
-        self.delay_derivs = []
-
+        self.delay_derivs = {}
+        self.phase_derivs = {}
+        self.phase_derivs_wrt_delay = []
+        self.order_number = None
+        self.print_par_func = ''
     def setup(self):
+        """This is a abstract class for setting up timing model class. It is designed for
+        reading .par file and check parameters.
+        """
         pass
 
 
@@ -156,6 +196,14 @@ class TimingModel(object):
 
         if binary_param is True:
             self.binary_params +=[param.name,]
+        if hasattr(self, '_param_table'):
+            param_row = [param.name, ]
+
+    def remove_param(self, param):
+        delattr(self, param)
+        self.params.remove(param)
+        if param in self.binary_params:
+            self.binary_params.remove(param)
 
     def set_special_params(self, spcl_params):
         als = []
@@ -206,6 +254,39 @@ class TimingModel(object):
                 mapping[par.index] = parname
         return mapping
 
+    def match_param_aliases(self, alias):
+        p_aliases = {}
+        # if alias is a parameter name, return itself
+        if alias in self.params:
+            return alias
+        # get all the aliases
+        for p in self.params:
+            par = getattr(self, p)
+            if par.aliases !=[]:
+                p_aliases[p] = par.aliases
+        # match alias
+        for pa, pav in zip(p_aliases.keys(), p_aliases.values()):
+            if alias in pav:
+                return pa
+        # if not found any thing.
+        return ''
+
+    def sort_model_components(self):
+        # initiate the sorted_components
+        sorted_list = ['']*len(list(self.components.keys()))
+        in_placed = []
+        not_in_placed = []
+        for cp, cpv in self.components.items():
+            if cpv.order_number is not None:
+                sorted_list[cpv.order_number] = cp
+                in_placed.append(cp)
+            else:
+                not_in_placed.append(cp)
+        for nicp in not_in_placed:
+            idx = sorted_list.index('')
+            sorted_list[idx] = nicp
+        return sorted_list
+
     #@Cache.use_cache
     def phase(self, toas):
         """Return the model-predicted pulse phase for the given TOAs."""
@@ -239,6 +320,98 @@ class TimingModel(object):
             delay += df(toas)
         toasBary = toasObs*u.day - delay*u.second
         return toasBary
+
+    def _make_delay_derivative_funcs(self, param, function, name_tplt):
+        """This function is a method to help make the delay derivatives wrt timing
+        model parameters use the parameter specific name and only have the toas
+        table as input.
+        Parameter
+        ----------
+        param: str
+            Name of parameter
+        function: method
+            The method to compute the delay derivatives. It is generally in the
+            formate of function(toas, parameter)
+        name_tplt: str
+            The name template of the new function. The parameter name will be
+            added in the end. For example: 'd_delay_d_' is a name template.
+        Return
+        ---------
+        A delay derivative function wrt to input parameter name with the input
+        name template and parameter name.
+        """
+        def deriv_func(toas):
+            return function(toas, param)
+        deriv_func.__name__ = name_tplt + param
+        deriv_func.__doc__ = "Delay derivative wrt " + param + " \n"
+        deriv_func.__doc__ += "Parameter\n----------\ntoas: TOA table\n    "
+        deriv_func.__doc__ += "TOA point where the derivative is evaluated at.\n"
+        deriv_func.__doc__ += "Return\n---------\n Delay derivatives wrt " + param
+        deriv_func.__doc__ += " at toa."
+        setattr(self, deriv_func.__name__, deriv_func)
+
+    def _make_phase_derivative_funcs(self, param, function, name_tplt):
+        """This function is a method to help make the phase derivatives wrt timing
+        model parameters use the parameter specific name and only have the toas
+        table as input.
+        Parameter
+        ----------
+        param: str
+            Name of parameter
+        function: method
+            The method to compute the phase derivatives. It is generally in the
+            formate of 'function(toas, parameter, delay)'
+        name_tplt: str
+            The name template of the new function. The parameter name will be
+            added in the end. For example: 'd_phase_d_' is a name template.
+        Return
+        ---------
+        A phase derivative function wrt to input parameter name with the input
+        name template and parameter name.
+        """
+        def deriv_func(toas, delay):
+            return function(toas, param, delay)
+        deriv_func.__name__ = name_tplt + param
+        deriv_func.__doc__ = "Phase derivative wrt " + param + " \n"
+        deriv_func.__doc__ += "Parameter\n----------\ntoas: TOA table\n    "
+        deriv_func.__doc__ += "TOA point where the derivative is evaluated at.\n"
+        deriv_func.__doc__ += "delay: numpy array\n    Time delay for phase calculation.\n"
+        deriv_func.__doc__ += "Return\n---------\n Phase derivatives wrt " + param
+        deriv_func.__doc__ += " at toa."
+        setattr(self, deriv_func.__name__, deriv_func)
+
+    def register_deriv_funcs(self, func, deriv_type, param=''):
+        """
+        This is a function to register the derivative function in to the
+        deriv_func dictionaries.
+        Parameter
+        ---------
+        func: method
+            The method calculates the derivative
+        deriv_type: str ['delay', 'phase', 'd_phase_d_delay']
+            Flag for different type of derivatives. It only accepts the three
+            above.
+        param: str, if for d_phase_d_delay it is optional
+            Name of parameter the derivative respect to
+        """
+        if deriv_type == 'd_phase_d_delay':
+            self.phase_derivs_wrt_delay += [func,]
+        elif deriv_type == 'delay':
+            pn = self.match_param_aliases(param)
+            if pn == '':
+                raise ValueError("Parameter '%s' in not in the model." % param)
+            if pn not in self.delay_derivs.keys():
+                self.delay_derivs[pn] = [func,]
+            else:
+                self.delay_derivs[pn] += [func,]
+        elif deriv_type == 'phase':
+            pn = self.match_param_aliases(param)
+            if pn == '':
+                raise ValueError("Parameter '%s' in not in the model." % param)
+            if pn not in self.phase_derivs.keys():
+                self.phase_derivs[pn] = [func,]
+            else:
+                self.phase_derivs[pn] += [func,]
 
     def d_phase_d_tpulsar(self, toas):
         """Return the derivative of phase wrt time at the pulsar.
@@ -280,53 +453,106 @@ class TimingModel(object):
 
 
     #@Cache.use_cache
-    def d_phase_d_param(self, toas, param):
+    def d_phase_d_param(self, toas, delay, param):
         """ Return the derivative of phase with respect to the parameter.
-
-        Either analytically, or numerically
         """
         result = 0.0
-
-        an_funcname = "d_phase_d_" + param
-        if hasattr(self, an_funcname):
-            # Have an analytic function for this parameter
-            result = getattr(self, an_funcname)(toas)
-        else:
-            result = self.d_phase_d_param_num(toas, param)
-
-        return result
-
-    #@Cache.use_cache
-    def d_phase_d_param_num(self, toas, param):
-        """ Return the derivative of phase with respect to the parameter.
-
-        NOT implemented yet.
-        """
-        result = 0.0
-
+        par = getattr(self, param)
         # TODO need to do correct chain rule stuff wrt delay derivs, etc
         # Is it safe to assume that any param affecting delay only affects
         # phase indirectly (and vice-versa)??
+        result = np.longdouble(np.zeros(len(toas))) * u.Unit('')/par.units
+        param_phase_derivs = []
+        if param in self.phase_derivs.keys():
+            for df in self.phase_derivs[param]:
+                if df.__name__.endswith(param):
+                    result += df(toas, delay).to(result.unit,
+                                         equivalencies=u.dimensionless_angles())
+                else: # Then this is a general derivative function.
+                    result += df(toas, param, delay).to(result.unit,
+                                         equivalencies=u.dimensionless_angles())
+        else: # Apply chain rule for the parameters in the delay.
+            d_delay_d_p = self.d_delay_d_param(toas, param)
+            for dpddf in self.phase_derivs_wrt_delay:
+                result += (dpddf(toas, delay) * d_delay_d_p).to(result.unit,
+                                         equivalencies=u.dimensionless_angles())
         return result
+
+    #@Cache.use_cache
+    def d_phase_d_param_num(self, toas, param, step=1e-2):
+        """ Return the derivative of phase with respect to the parameter.
+        """
+        # TODO : We need to know the range of parameter.
+        par = getattr(self, param)
+        ori_value = par.value
+        unit = par.units
+        if ori_value == 0:
+            h = 1.0 * step
+        else:
+            h = ori_value * step
+        parv = [par.value-h, par.value+h]
+
+        phaseI = np.zeros((len(toas),2))
+        phaseF = np.zeros((len(toas),2))
+        for ii, val in enumerate(parv):
+            par.value = val
+            ph = self.phase(toas)
+            phaseI[:,ii] = ph.int
+            phaseF[:,ii] = ph.frac
+        resI = (- phaseI[:,0] + phaseI[:,1])
+        resF = (- phaseF[:,0] + phaseF[:,1])
+        result = (resI + resF)/(2.0 * h)
+        # shift value back to the original value
+        par.value = ori_value
+        return result * u.Unit("")/unit
+
+    def d_delay_d_param_num(self, toas, param, step=1e-2):
+        """ Return the derivative of phase with respect to the parameter.
+        """
+        # TODO : We need to know the range of parameter.
+        par = getattr(self, param)
+        ori_value = par.value
+        if ori_value is None:
+             # A parameter did not get to use in the model
+            log.warn("Parameter '%s' is not used by timing model." % param)
+            return np.zeros(len(toas)) * (u.second/par.units)
+        unit = par.units
+        if ori_value == 0:
+            h = 1.0 * step
+        else:
+            h = ori_value * step
+        parv = [par.value-h, par.value+h]
+        delay = np.zeros((len(toas),2))
+        for ii, val in enumerate(parv):
+            par.value = val
+            try:
+                delay[:,ii] = self.delay(toas)
+            except:
+                par.value = ori_value
+                raise
+        d_delay = (-delay[:,0] + delay[:,1])/2.0/h
+        par.value = ori_value
+        return d_delay * (u.second/unit)
 
     def d_delay_d_param(self, toas, param):
         """
         Return the derivative of delay with respect to the parameter.
         """
         par = getattr(self, param)
-        result = np.zeros(len(toas)) * u.s/par.units
-        param_delay_derivs = []
-        for f in self.delay_derivs:
-            if f.__name__.endswith('_'+param):
-                param_delay_derivs.append(f)
-
-        for df in param_delay_derivs:
-            print df.__name__
-            result += df(toas).to(u.s/par.units, equivalencies=u.dimensionless_angles())
+        result = np.longdouble(np.zeros(len(toas)) * u.s/par.units)
+        if param not in self.delay_derivs.keys():
+            raise AttributeError("Derivative function for '%s' is not provided"
+                                 " or not registred. "%param)
+        for df in self.delay_derivs[param]:
+            # The derivative function is for a specific parameter.
+            if df.__name__.endswith(param):
+                result += df(toas).to(result.unit, equivalencies=u.dimensionless_angles())
+            else: # Then this is a general derivative function.
+                result += df(toas, param).to(result.unit, equivalencies=u.dimensionless_angles())
         return result
 
     #@Cache.use_cache
-    def designmatrix(self, toas, incfrozen=False, incoffset=True):
+    def designmatrix(self, toas, scale_by_F0=True, incfrozen=False, incoffset=True):
         """
         Return the design matrix: the matrix with columns of d_phase_d_param/F0
         or d_toa_d_param
@@ -335,7 +561,7 @@ class TimingModel(object):
         params += [par for par in self.params if incfrozen or
                 not getattr(self, par).frozen]
 
-        F0 = self.F0.value / u.s        # 1/sec
+        F0 = self.F0.quantity        # 1/sec
         ntoas = len(toas)
         nparams = len(params)
         delay = self.delay(toas)
@@ -348,27 +574,28 @@ class TimingModel(object):
 
         M = np.zeros((ntoas, nparams))
         for ii, param in enumerate(params):
-            dpdp = "d_phase_d_" + param
-            dddp = "d_delay_d_" + param
-            print dddp, dpdp
             if param == 'Offset':
                 M[:,ii] = 1.0
                 units.append(u.s/u.s)
-            elif hasattr(self, dpdp):
-                q = getattr(self, dpdp)(toas) / F0
-                #q = self.d_phase_d_param(toas, param) / F0
-                M[:,ii] = q
-                units.append(q.unit)
             else:
-                q = self.d_delay_d_param(toas, param)
+                # NOTE Here we have negative sign here. Since in pulsar timing
+                # the residuals are calculated as (Phase - int(Phase)), which is different
+                # from the conventional defination of least square definetion (Data - model)
+                # We decide to add minus sign here in the design matrix, so the fitter
+                # keeps the conventional way.
+                q = - self.d_phase_d_param(toas, delay,param)
                 M[:,ii] = q
-                # TODO: Make all the derivs has unit
-                if hasattr(q, 'unit'):
-                    units.append(q.unit)
-                else:
-                    units.append(u.s/ getattr(self, param).units)
+                units.append(u.Unit("")/ getattr(self, param).units)
 
-        return M, params, units
+        if scale_by_F0:
+            mask = []
+            for ii, un in enumerate(units):
+                if params[ii] == 'Offset':
+                    continue
+                units[ii] = un * u.second
+                mask.append(ii)
+            M[:, mask] /= F0.value
+        return M, params, units, scale_by_F0
 
     def __str__(self):
         result = ""
@@ -376,15 +603,37 @@ class TimingModel(object):
             result += str(getattr(self, par)) + "\n"
         return result
 
+    def print_param_control(self, control_info={'UNITS': 'TDB', 'TIMEEPH':'FB90'},
+                          order=['UNITS', 'TIMEEPH']):
+        result = ""
+        for pc in order:
+            if pc not in control_info.keys():
+                continue
+            result += pc + ' ' + control_info[pc] + '\n'
+        return result
+
+    def print_param_component(self, component_name):
+        result = ''
+        if component_name not in self.components:
+            return result
+        else:
+            if hasattr(self, self.components[component_name].param_print_func):
+                result += getattr(self, self.components[component_name].param_print_func)()
+            else:
+                for p in self.components[component_name].params:
+                    par = getattr(self, p)
+                    if par.quantity is not None:
+                        result += par.as_parfile_line()
+        return result
+
     def as_parfile(self):
         """Returns a parfile representation of the entire model as a string."""
         result = ""
-        for par in self.params:
-            result += getattr(self, par).as_parfile_line()
-        # Always include UNITS in par file. For now, PINT only supports TDB
-        result += "UNITS TDB\n"
-        if hasattr(self,'BinaryModelName'):
-            result += "BINARY {0}\n".format(self.BinaryModelName)
+        result += self.PSR.as_parfile_line()
+        sort_comps = self.sort_model_components()
+        for scp in sort_comps:
+            result += self.print_param_component(scp)
+        result += self.print_param_control()
         return result
 
     def read_parfile(self, filename):
@@ -445,7 +694,7 @@ class TimingModel(object):
             False : bool
                 The subclass is not inculded in the parfile.
         """
-        pNames_inpar = para_dict.keys()
+        pNames_inpar = list(para_dict.keys())
 
         pNames_inModel = self.params
 
@@ -489,12 +738,46 @@ class TimingModel(object):
                     return True
                 else:
                     continue
-
             # TODO Check prefix parameter
-
             return False
 
         return True
+
+class ComponentInfo(object):
+    """
+    This is a class to save the components information before it get combined
+    to a specific timing model
+    Parameter
+    ---------
+    comp : TimingModel component object
+        The timing model component object
+    """
+    def __init__(self, comp):
+        self.name = comp.__class__.__name__
+        comp.params.remove('PSR')
+        self.params = comp.params
+        #NOTE This should be changed in the future
+        self.param_print_func = comp.print_par_func
+        self.order_number = comp.order_number
+    def is_param_in_component(self, param):
+        if param in self.params:
+            return True
+        else:
+            match = False
+            try:
+                p, i, iv = utils.split_prefixed_name(param)
+                for cp in self.params:
+                    if cp.startswith(p):
+                        try:
+                            cpp, cpi, cpiv = utils.split_prefixed_name(param)
+                            if cpp == p:
+                                match = True
+                                break
+                        except:
+                            continue
+                return match
+            except:
+                return match
 
 def generate_timing_model(name, components, attributes={}):
 
@@ -514,6 +797,7 @@ def generate_timing_model(name, components, attributes={}):
         numComp = len(components)
     except:
         components = (components,)
+    cps = {}
     for c in components:
         try:
             if not issubclass(c,TimingModel):
@@ -522,6 +806,10 @@ def generate_timing_model(name, components, attributes={}):
         except:
             raise(TypeError("generate_timing_model() Arg 2"+
                             "has to be a tuple of classes"))
+        cp = c()
+        cpi = ComponentInfo(cp)
+        cps[cpi.name] = cpi
+    attributes['components'] = cps
 
     return type(name, components, attributes)
 

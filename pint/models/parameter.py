@@ -7,12 +7,13 @@ import numpy
 import astropy.time as time
 from astropy import log
 from pint import pint_units
+from pint import pulsar_mjd
 import astropy.units as u
 import astropy.constants as const
 from astropy.coordinates.angles import Angle
 import re
 import numbers
-import priors
+from . import priors
 from ..toa_select import TOASelect
 
 
@@ -77,7 +78,7 @@ class Parameter(object):
                  uncertainty=None, frozen=True, aliases=None, continuous=True,
                  print_quantity=str, set_quantity=lambda x: x,
                  get_value=lambda x: x,
-                 prior=priors.Prior(priors.UniformRV()),
+                 prior=priors.Prior(priors.UniformUnboundedRV()),
                  set_uncertainty=fortran_float):
 
         self.name = name  # name of the parameter
@@ -124,7 +125,7 @@ class Parameter(object):
             if self.units is not None:
                 if unt != self.units:
                     wmsg = 'Parameter '+self.name+' default units has been '
-                    wmsg += ' reset to ' + str(unt) + ' from '+ str(self._units)
+                    wmsg += ' reset to ' + str(unt) + ' from '+ str(self.units)
                     log.warning(wmsg)
                 try:
                     if hasattr(self.quantity, 'unit'):
@@ -242,6 +243,10 @@ class Parameter(object):
                 return
         self._uncertainty = self.set_uncertainty(val)
 
+        # This is avoiding negtive unvertainty input.
+        if self._uncertainty is not None and self.uncertainty_value < 0:
+            self.uncertainty_value = numpy.abs(self.uncertainty_value)
+
     @property
     def uncertainty_value(self):
         """Return a pure value from .uncertainty. The unit will associate
@@ -266,12 +271,19 @@ class Parameter(object):
                 self.uncertainty_value = val
         self._uncertainty = self.set_uncertainty(val)
 
+    def print_uncertainty(self, uncertainty):
+        return str(uncertainty.to(self.units).value)
+
     def __str__(self):
         out = self.name
         if self.units is not None:
             out += " (" + str(self.units) + ")"
-        out += " " + self.print_quantity(self.quantity)
-        if self.uncertainty is not None:
+        if self.quantity is not None:
+            out += " " + self.print_quantity(self.quantity)
+        else:
+            out += " " + "UNSET"
+            return out
+        if self.uncertainty is not None and isinstance(self.value, numbers.Number):
             out += " +/- " + str(self.uncertainty.to(self.units))
         return out
 
@@ -299,7 +311,8 @@ class Parameter(object):
             return ""
         line = "%-15s %25s" % (self.name, self.print_quantity(self.quantity))
         if self.uncertainty is not None:
-            line += " %d %s" % (0 if self.frozen else 1, str(self.uncertainty_value))
+            line += " %d %s" % (0 if self.frozen else 1, \
+                                self.print_uncertainty(self.uncertainty))
         elif not self.frozen:
             line += " 1"
         return line + "\n"
@@ -308,6 +321,13 @@ class Parameter(object):
         """
         Parse a parfile line into the current state of the parameter.
         Returns True if line was successfully parsed, False otherwise.
+        Notes
+        -----
+        The accepted format:
+            NAME value
+            NAME value fit_flag
+            NAME value fit_flag uncertainty
+            NAME value uncertainty
         """
         try:
             k = line.split()
@@ -323,17 +343,24 @@ class Parameter(object):
             self.set(k[1])
         if len(k) >= 3:
             try:
-                if int(k[2]) > 0:
+                fit_flag = int(k[2])
+                if fit_flag == 0:
+                    self.frozen = True
+                    ucty = 0.0
+                elif fit_flag == 1:
                     self.frozen = False
-                    ucty = '0.0'
+                    ucty = 0.0
+                else:
+                    ucty = fit_flag
             except:
                 if is_number(k[2]):
                     ucty = k[2]
                 else:
-                    errmsg = 'The third column of parfile can only be fitting '
-                    errmsg += 'flag (1/0) or uncertainty.'
+                    errmsg = 'Unidentified string ' + k[2] + ' in'
+                    errmsg += ' parfile line ' + k
                     raise ValueError(errmsg)
-            if len(k) == 4:
+
+            if len(k) >= 4:
                 ucty = k[3]
             self.uncertainty = self.set_uncertainty(ucty)
         return True
@@ -384,7 +411,7 @@ class floatParameter(Parameter):
         test1 (s) 100.0
     """
     def __init__(self, name=None, value=None, units=None, description=None,
-                 uncertainty=None, frozen=True, aliases=[], continuous=True,
+                 uncertainty=None, frozen=True, aliases=None, continuous=True,
                  long_double=False, **kwargs):
         self.long_double = long_double
         set_quantity = self.set_quantity_float
@@ -417,7 +444,7 @@ class floatParameter(Parameter):
             raise ValueError("long_double property can only be set as boolean"
                              " type")
         if hasattr(self, 'long_double'):
-            if self._long_double != val and hasattr(self, 'quantity'):
+            if self.long_double != val and hasattr(self, 'quantity'):
                 if not val:
                     log.warning("Setting floatParameter from long double to float,"
                                 " precision will be lost.")
@@ -493,7 +520,7 @@ class strParameter(Parameter):
         test1 This is a test
     """
     def __init__(self, name=None, value=None, description=None,
-                 aliases=[], **kwargs):
+                 aliases=None, **kwargs):
         print_quantity = str
         get_value = lambda x: x
         set_quantity = lambda x: str(x)
@@ -536,7 +563,7 @@ class boolParameter(Parameter):
         test1 N
     """
     def __init__(self, name=None, value=None, description=None, frozen=True,
-                 aliases=[], **kwargs):
+                 aliases=None, **kwargs):
         print_quantity = lambda x: 'Y' if x else 'N'
         set_quantity = self.set_quantity_bool
         get_value = lambda x: x
@@ -599,13 +626,13 @@ class MJDParameter(Parameter):
         test1 (d) 54000.000000000000000
     """
     def __init__(self, name=None, value=None, description=None,
-                 uncertainty=None, frozen=True, continuous=True, aliases=[],
+                 uncertainty=None, frozen=True, continuous=True, aliases=None,
                  time_scale='utc', **kwargs):
         self.time_scale = time_scale
         set_quantity = self.set_quantity_mjd
         print_quantity = time_to_mjd_string
         get_value = time_to_longdouble
-        set_uncertainty = self.set_quantity_mjd
+        set_uncertainty = self.set_uncertainty_mjd
         super(MJDParameter, self).__init__(name=name, value=value, units="MJD",
                                            description=description,
                                            uncertainty=uncertainty,
@@ -619,6 +646,31 @@ class MJDParameter(Parameter):
         self.value_type = time.Time
         self.paramType = 'MJDParameter'
         self.special_arg += ['time_scale',]
+
+    @property
+    def uncertainty_value(self):
+        """Return a pure value from .uncertainty. The unit will associate
+        with .units
+        """
+        if self._uncertainty is None:
+            return None
+        else:
+            return self._uncertainty.value
+
+    @uncertainty_value.setter
+    def uncertainty_value(self, val):
+        """Setter for uncertainty_value. Setting .uncertainty_value will only change
+        the .uncertainty attribute.
+        """
+        if val is None:
+            if not isinstance(self.uncertainty, (str, bool)) and \
+                self._uncertainty_value is not None:
+                log.warning('This parameter has uncertainty value. '
+                            'Change it to None will lost information.')
+            else:
+                self.uncertainty_value = val
+        self._uncertainty = self.set_uncertainty(val)
+
     def set_quantity_mjd(self, val):
         """Value setter for MJD parameter,
            Accepted format:
@@ -631,10 +683,11 @@ class MJDParameter(Parameter):
             result = time_from_longdouble(val, self.time_scale)
         elif isinstance(val, str):
             try:
-                 result = time_from_mjd_string(val, self.time_scale)
+                result = time_from_mjd_string(val, self.time_scale)
             except:
-                raise ValueError('String ' + val + 'can not be converted to'
+                log.error('String ' + val + ' can not be converted to'
                                  'a time object.' )
+                raise
 
         elif isinstance(val,time.Time):
             result = val
@@ -642,6 +695,20 @@ class MJDParameter(Parameter):
             raise ValueError('MJD parameter can not accept '
                              + type(val).__name__ + 'format.')
         return result
+
+    def set_uncertainty_mjd(self, val):
+        # First try to use astropy unit conversion
+        try:
+            # If this fails, it will raise UnitConversionError
+            _ = val.to(self.units)
+            result = data2longdouble(val.value) * self.units
+        except AttributeError:
+            # This will happen if the input value did not have units
+            result = data2longdouble(val) * self.units
+        return result
+
+    def print_uncertainty(self, uncertainty):
+        return longdouble2string(self.uncertainty_value)
 
 
 class AngleParameter(Parameter):
@@ -678,13 +745,14 @@ class AngleParameter(Parameter):
         test1 (hourangle) 12:20:10.00000000
     """
     def __init__(self, name=None, value=None, description=None, units='rad',
-             uncertainty=None, frozen=True, continuous=True, aliases=[],**kwargs):
+             uncertainty=None, frozen=True, continuous=True, aliases=None,
+             **kwargs):
         self._str_unit = units
         self.unit_identifier = {
-            'h:m:s': (u.hourangle, 'h', '0:0:%.15fh'),
-            'd:m:s': (u.deg, 'd', '0:0:%.15fd'),
-            'rad': (u.rad, 'rad', '%.15frad'),
-            'deg': (u.deg, 'deg', '%.15fdeg'),
+            'h:m:s': (u.hourangle, 'h', '0:0:%.20fh'),
+            'd:m:s': (u.deg, 'd', '0:0:%.20fd'),
+            'rad': (u.rad, 'rad', '%.20frad'),
+            'deg': (u.deg, 'deg', '%.20fdeg'),
         }
         # Check unit format
         if units.lower() not in self.unit_identifier.keys():
@@ -692,9 +760,7 @@ class AngleParameter(Parameter):
 
         self.unitsuffix = self.unit_identifier[units.lower()][1]
         set_quantity = self.set_quantity_angle
-        print_quantity = lambda x: x.to_string(sep=':', precision=8) \
-                        if x.unit != u.rad else x.to_string(decimal = True,
-                        precision=8)
+        print_quantity = self.print_quantity_angle
         #get_value = lambda x: Angle(x * self.unit_identifier[units.lower()][0])
         get_value = lambda x: x.value
         set_uncertainty = self.set_uncertainty_angle
@@ -721,7 +787,7 @@ class AngleParameter(Parameter):
         3. number string
         """
         if isinstance(val, numbers.Number):
-            result = Angle(val * self.units)
+            result = Angle(data2longdouble(val) * self.units)
         elif isinstance(val, str):
             result = Angle(val + self.unitsuffix)
         elif hasattr(val, 'unit'):
@@ -749,6 +815,26 @@ class AngleParameter(Parameter):
             raise ValueError('Angle parameter can not accept '
                              + type(val).__name__ + 'format.')
         return result
+
+    def print_quantity_angle(self, quan):
+        """This is a function to print out the angle parameter.
+        """
+        if ':' in self._str_unit:
+            return quan.to_string(sep=':', precision=8)
+        else:
+            return quan.to_string(decimal = True, precision=15)
+
+    def print_uncertainty(self, unc):
+        """This is a function for printing out the uncertainty
+        """
+        if ':' in self._str_unit:
+            angle_arcsec = unc.to(u.arcsec)
+            if self.units == u.hourangle:
+                # Triditionaly hourangle uncertainty is in hourangle seconds
+                angle_arcsec  /= 15.0
+            return angle_arcsec.to_string(decimal = True, precision=20)
+        else:
+            return unc.to_string(decimal = True, precision=20)
 
 
 class prefixParameter(object):
@@ -791,9 +877,9 @@ class prefixParameter(object):
         Time scale for MJDParameter class.
     """
     def __init__(self, parameter_type='float',name=None, value=None, units=None,
-                 unitTplt=None, description=None, descriptionTplt=None,
+                 unit_template=None, description=None, description_template=None,
                  uncertainty=None, frozen=True, continuous=True,
-                 prefix_aliases=[],long_double=False, time_scale='utc',
+                 prefix_aliases=None, long_double=False, time_scale='utc',
                  **kwargs):
         # Split prefixed name, if the name is not in the prefixed format, error
         # will be raised
@@ -810,11 +896,11 @@ class prefixParameter(object):
             raise ValueError("Unknow parameter type '"+ parameter_type + "' ")
 
         # Set up other attributes in the wrapper class
-        self.unit_template = unitTplt
-        self.description_template = descriptionTplt
+        self.unit_template = unit_template
+        self.description_template = description_template
         input_units = units
         input_description = description
-        self.prefix_aliases = prefix_aliases
+        self.prefix_aliases = [] if prefix_aliases is None else prefix_aliases
         # set templates, the templates should be a lambda function and input is
         # the index of prefix parameter.
         if self.unit_template is None:
@@ -826,8 +912,9 @@ class prefixParameter(object):
         real_units = self.unit_template(self.index)
         real_description = self.description_template(self.index)
         aliases = []
-        for pa in prefix_aliases:
+        for pa in self.prefix_aliases:
             aliases.append(pa + self.idxfmt)
+        self.long_double = long_double
         # initiate parameter class
         self.param_comp = self.param_class(name=self.name, value=value,
                                            units=real_units,
@@ -924,15 +1011,27 @@ class prefixParameter(object):
     def special_arg(self):
         return self.param_comp.special_arg
 
+    def __str__(self):
+        out = self.name
+        if self.units is not None:
+            out += " (" + str(self.units) + ")"
+        out += " " + self.print_quantity(self.quantity)
+        if self.uncertainty is not None:
+            out += " +/- " + str(self.uncertainty.to(self.units))
+        return out
+
     # Define the function to call functions inside of parameter composition.
+    def __str__(self):
+        return self.param_comp.__str__()
+
     def from_parfile_line(self, line):
         return self.param_comp.from_parfile_line(line)
 
     def prior_pdf(self,value=None, logpdf=False):
         return self.param_comp.prior_pdf(value, logpdf)
 
-    def print_quantity(self):
-        self.param_comp.print_quantity()
+    def print_quantity(self, quantity):
+        return self.param_comp.print_quantity(quantity)
 
     def name_matches(self, name):
         return self.param_comp.name_matches(name)
@@ -959,7 +1058,7 @@ class prefixParameter(object):
 
         new_name = self.prefix + format(index, '0'+ str(len(self.idxfmt)))
         kws = dict()
-        for key in ['units', 'unitTplt', 'description','descriptionTplt',
+        for key in ['units', 'unit_template', 'description','description_template',
                     'frozen', 'continuous', 'prefix_aliases', 'long_double',
                     'time_scale', 'parameter_type']:
             if hasattr(self, key):
@@ -1012,9 +1111,9 @@ class maskParameter(floatParameter):
     """
     def __init__(self, name=None, index=1, key=None, key_value=None,
                  value=None, long_double=False, units= None, description=None,
-                 uncertainty=None, frozen=True, continuous=False, aliases=[]):
+                 uncertainty=None, frozen=True, continuous=False, aliases=None):
         self.is_mask = True
-        self.key_identifier = {'mjd': (lambda x: time.Time(x, format='mjd'), 2),
+        self.key_identifier = {'mjd': (lambda x: time.Time(x, format='mjd').mjd, 2),
                                 'freq': (float, 2),
                                 'name': (str, 1),
                                 'tel': (str, 1)}
@@ -1037,6 +1136,7 @@ class maskParameter(floatParameter):
         self.index = index
         name_param = name + str(index)
         self.origin_name = name
+        self.prefix = self.origin_name
         super(maskParameter, self).__init__(name=name_param, value=value,
                                             units=units,
                                             description=description,
@@ -1052,8 +1152,40 @@ class maskParameter(floatParameter):
             self.aliases.append(name)
         self.from_parfile_line = self.from_parfile_line_mask
         self.as_parfile_line = self.as_parfile_line_mask
+        self.is_prefix = True
+
+    def __str__(self):
+        out = self.name
+        if self.units is not None:
+            out += " (" + str(self.units) + ")"
+
+        out += " " + self.key
+        for kv in self.key_value:
+            out += " " + str(kv)
+        if self.quantity is not None:
+            out += " " + self.print_quantity(self.quantity)
+        else:
+            out += " " + "UNSET"
+            return out
+        if self.uncertainty is not None and isinstance(self.value, numbers.Number):
+            out += " +/- " + str(self.uncertainty.to(self.units))
+        return out
 
     def from_parfile_line_mask(self, line):
+        """
+        This is a method to read mask parameter line (e.g. JUMP)
+        Notes
+        -----
+        The accepted format:
+            NAME key key_value parameter_value
+            NAME key key_value parameter_value fit_flag
+            NAME key key_value parameter_value fit_flag uncertainty
+            NAME key key_value parameter_value uncertainty
+            NAME key key_value1 key_value2 parameter_value
+            NAME key key_value1 key_value2 parameter_value fit_flag
+            NAME key key_value1 key_value2 parameter_value fit_flag uncertainty
+            NAME key key_value1 key_value2 parameter_value uncertainty
+        """
         try:
             k = line.split()
             name = k[0].upper()
@@ -1090,16 +1222,23 @@ class maskParameter(floatParameter):
             self.set(k[2 + len_key_v])
         if len(k) >= 4 + len_key_v:
             try:
-                if int(k[3 + len_key_v]) > 0:
+                fit_flag =  int(k[3 + len_key_v])
+                if fit_flag == 0:
+                    self.frozen = True
+                    ucty = 0.0
+                elif fit_flag == 1:
                     self.frozen = False
-                    ucty = '0.0'
+                    ucty = 0.0
+                else:
+                    ucty = fit_flag
             except:
-                if is_number(k[4 + len_key_v]):
+                if is_number(k[3 + len_key_v]):
                     ucty = k[3 + len_key_v]
                 else:
                     errmsg = 'Unidentified string ' + k[3 + len_key_v] + ' in'
                     errmsg += ' parfile line ' + k
                     raise ValueError(errmsg)
+
             if len(k) >= 5 + len_key_v:
                 ucty = k[4 + len_key_v]
             self.uncertainty = self.set_uncertainty(ucty)
@@ -1132,11 +1271,38 @@ class maskParameter(floatParameter):
     def select_toa_mask(self, toas):
         """Select the toas.
         Parameter
-        ----------
+        ---------
         toas : toas table
         Return
-        ----------
-        A mask array. the select toas are masked as True.
+        ------
+        A array of returned index.
         """
-        self.toa_select = TOASelect(self.key, self.key_value)
-        return self.toa_select.get_toa_key_mask(toas)
+        column_match = {'mjd': 'mjd_float',
+                        'freq': 'freq',
+                        'tel': 'obs'}
+        if len(self.key_value) == 1:
+            if not hasattr(self, 'toa_selector'):
+                self.toa_selector = TOASelect(is_range=False, use_hash=True)
+            condition = {self.name: self.key_value[0]}
+        elif len(self.key_value) == 2:
+            if not hasattr(self, 'toa_selector'):
+                self.toa_selector = TOASelect(is_range=True, use_hash=True)
+            condition = {self.name: tuple(self.key_value)}
+        else:
+            raise ValueError('Parameter %s has more key values than '
+                             'expected.(Expect 1 or 2 key values)' % self.name)
+        # get the table columns
+        # TODO Right now it is only supports mjd, freq, tel, and flagkeys,
+        # We need to consider some more complicated situation
+        key = self.key.replace('-', '')
+        if key not in column_match.keys(): # This only works for the one with flags.
+            section_name = key+'_section'
+            if section_name not in toas.keys():
+                flag_col = [x.get(key, None) for x in toas['flags']]
+                toas[section_name] = flag_col
+            col = toas[section_name]
+        else:
+            col = toas[column_match[key]]
+        select_idx = self.toa_selector.get_select_index(condition, col)
+
+        return select_idx[self.name]

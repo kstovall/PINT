@@ -1,4 +1,5 @@
 #! /usr/bin/env python
+from __future__ import print_function, division
 import pint.toa
 import pint.models
 import pint.fitter
@@ -7,8 +8,9 @@ import pint.models.model_builder as mb
 import matplotlib.pyplot as plt
 import astropy.units as u
 import os, sys
+import numpy as np
 
-datadir = os.path.dirname(os.path.abspath(__file__))
+datadir = os.path.dirname(os.path.abspath(str(__file__)))
 parfile = os.path.join(datadir, 'NGC6440E.par')
 timfile = os.path.join(datadir, 'NGC6440E.tim')
 
@@ -17,6 +19,21 @@ m = mb.get_model(parfile)
 
 # Read in the TOAs
 t = pint.toa.get_TOAs(timfile)
+
+# Examples of how to select some subsets of TOAs
+# These can be un-done using t.unselect()
+#
+# Use every other TOA
+# t.select(np.where(np.arange(t.ntoas) % 2))
+
+# Use only TOAs with errors < 30 us
+# t.select(t.get_errors() < 30 * u.us)
+
+# Use only TOAs from the GBT (although this is all of them for this example)
+# t.select(t.get_obss() == 'gbt')
+
+# Print a summary of the TOAs that we have
+t.print_summary()
 
 # These are pre-fit residuals
 rs = pint.residuals.resids(t, m).phase_resids
@@ -29,16 +46,16 @@ plt.grid()
 plt.show()
 
 # Now do the fit
-print "Fitting..."
-f = pint.fitter.fitter(t, m)
-f.call_minimize()
+print("Fitting...")
+f = pint.fitter.WlsFitter(t, m)
+f.fit_toas()
 
 # Print some basic params
-print "Best fit has reduced chi^2 of", f.resids.chi2_reduced
-print "RMS in phase is", f.resids.phase_resids.std()
-print "RMS in time is", f.resids.time_resids.std().to(u.us)
-print "\n Best model is:"
-print f.model.as_parfile()
+print("Best fit has reduced chi^2 of", f.resids.chi2_reduced)
+print("RMS in phase is", f.resids.phase_resids.std())
+print("RMS in time is", f.resids.time_resids.std().to(u.us))
+print("\n Best model is:")
+print(f.model.as_parfile())
 
 plt.errorbar(xt,
              f.resids.time_resids.to(u.us).value,

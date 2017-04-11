@@ -4,13 +4,13 @@ import numpy
 import astropy.units as u
 import astropy.constants as const
 from astropy import log
-import parameter as p
+from . import parameter as p
 from .timing_model import TimingModel
 from .. import Tsun, Tmercury, Tvenus, Tearth, Tmars, \
         Tjupiter, Tsaturn, Turanus, Tneptune
 
 class SolarSystemShapiro(TimingModel):
-
+    register = True
     def __init__(self):
         super(SolarSystemShapiro, self).__init__()
 

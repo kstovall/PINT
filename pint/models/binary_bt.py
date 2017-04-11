@@ -4,7 +4,7 @@
 from pint import ls,GMsun,Tsun
 from .stand_alone_psr_binaries.BT_model import BTmodel
 from .pulsar_binary import PulsarBinary
-import parameter as p
+from . import parameter as p
 from .timing_model import Cache, TimingModel, MissingParameter
 import astropy.units as u
 
@@ -17,6 +17,7 @@ class BinaryBT(PulsarBinary):
     BTmodel special parameters:
     GAMMA Binary Einsten delay coeeficient
     """
+    register = True
     def __init__(self):
         super(BinaryBT, self).__init__()
         self.binary_model_name = 'BT'
@@ -26,7 +27,9 @@ class BinaryBT(PulsarBinary):
              units="second",
              description="Time dilation & gravitational redshift"),
              binary_param = True)
-
+        # remove unused parameter. 
+        self.remove_param('M2')
+        self.remove_param('SINI')
     def setup(self):
         super(BinaryBT, self).setup()
         # If any necessary parameter is missing, raise MissingParameter.
@@ -50,10 +53,3 @@ class BinaryBT(PulsarBinary):
         if self.GAMMA.value is None:
             self.GAMMA.set("0")
             self.GAMMA.frozen = True
-
-        # If eccentricity is zero, freeze some parameters to 0
-        # OM = 0 -> T0 = TASC
-        if self.ECC.value == 0 or self.ECC.value is None:
-            for p in ("E", "OM", "OMDOT", "EDOT"):
-                getattr(self, p).set("0")
-                getattr(self, p).frozen = True

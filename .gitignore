@@ -6,7 +6,10 @@
 
 # C extensions
 *.so
-#pickle
+# Try letting str2lc_py.c be in repo to remove dependency on Cython for users to install PINT
+# pint/cutils/str2ld_py.c
+
+# pickle files
 *.pickle.gz
 
 # Packages
@@ -35,6 +38,7 @@ nosetests.xml
 coverage
 doc/_build
 doc/api
+tests/datafile/test_fitter_plot.pdf
 
 # Translations
 *.mo
@@ -60,3 +64,6 @@ de-403-masses.tpc
 
 # ipython notebook temps
 .ipynb_checkpoints
+
+.idea
+.cache

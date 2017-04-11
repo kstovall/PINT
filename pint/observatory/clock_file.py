@@ -7,6 +7,11 @@ import numpy
 import astropy.units as u
 from astropy.time import Time
 from astropy import log
+from astropy.utils.exceptions import AstropyWarning
+from astropy._erfa import ErfaWarning
+import warnings
+from six import add_metaclass
+
 
 class ClockFileMeta(type):
     """Metaclass that provides a registry for different clock file formats.
@@ -21,6 +26,7 @@ class ClockFileMeta(type):
         super(ClockFileMeta, cls).__init__(name, bases, members)
 
 
+@add_metaclass(ClockFileMeta)
 class ClockFile(object):
     """The ClockFile class provides a way to read various formats of clock
     files.  It will provide the clock information from the file as arrays
@@ -46,8 +52,6 @@ class ClockFile(object):
 
     """
 
-    __metaclass__ = ClockFileMeta
-
     @classmethod
     def read(cls, filename, format='tempo', **kwargs):
         if format in cls._formats.keys():
@@ -57,7 +61,7 @@ class ClockFile(object):
 
     @property
     def time(self): return self._time
-        
+
     @property
     def clock(self): return self._clock
 
@@ -78,7 +82,7 @@ class ClockFile(object):
 
         # Can't pass Times directly to numpy.interp.  This should be OK:
         return numpy.interp(t.mjd, self.time.mjd, self.clock.to(u.us))*u.us
-        
+
 
 class Tempo2ClockFile(ClockFile):
 
@@ -87,7 +91,10 @@ class Tempo2ClockFile(ClockFile):
     def __init__(self, filename, **kwargs):
         self.filename = filename
         mjd, clk, self.header = self.load_tempo2_clock_file(filename)
-        self._time = Time(mjd, format='mjd', scale='utc')
+        #NOTE Clock correction file has a time far in the future as ending point
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', ErfaWarning)
+            self._time = Time(mjd, format='pulsar_mjd', scale='utc')
         self._clock = clk * u.s
 
     @staticmethod
@@ -110,13 +117,17 @@ class TempoClockFile(ClockFile):
         self.filename = filename
         self.obscode = obscode
         mjd, clk = self.load_tempo1_clock_file(filename,site=obscode)
-        self._time = Time(mjd, format='mjd', scale='utc')
+        #NOTE Clock correction file has a time far in the future as ending point
+        # We are swithing off astropy warning only for gps correction.
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', ErfaWarning)
+            self._time = Time(mjd, format='pulsar_mjd', scale='utc')
         self._clock = clk * u.us
 
     @staticmethod
     def load_tempo1_clock_file(filename,site=None):
         """
-        Given the specified full path to the tempo1-format clock file, 
+        Given the specified full path to the tempo1-format clock file,
         will return two numpy arrays containing the MJDs and the clock
         corrections (us).  All computations here are done as in tempo, with
         the exception of the 'F' flag (to disable interpolation), which
@@ -183,4 +194,3 @@ class TempoClockFile(ClockFile):
             clkcorrs.append(clkcorr2 - clkcorr1)
 
         return mjds, clkcorrs
-

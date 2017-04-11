@@ -17,19 +17,19 @@ def to_array(x):
     x = np.asarray(x)
     if len(x.shape)==0: return np.asarray([x])
     return x
-    
+
 def from_array(x):
     if (len(x.shape)==1) and (x.shape[0]==1): return x[0]
     return x
 
 
 def sig2sigma(sig,two_tailed=True,logprob=False):
-    """Convert tail probability to "sigma" units, i.e., find the value of the 
+    """Convert tail probability to "sigma" units, i.e., find the value of the
        argument for the normal distribution beyond which the integrated tail
        probability is sig.  Note that the default is to interpret this number
        as the two-tailed value, as this is the quantity that goes to 0
        when sig goes to 1.
-       
+
        args
        ----
        sig     the chance probability
@@ -90,19 +90,19 @@ def sigma2sig(sigma,two_tailed=True):
     return 1 - 0.5*erfc(-sigma/2**0.5)
 
 def sigma_trials(sigma,trials):
-   # correct a sigmal value for a trials factor
-   if sigma < 20:
-       p = sigma2sig(sigma)*trials
-       if p >= 1: return 0
-       return sig2sigma(p)
-   else:
-      # use an asymptotic expansion -- this needs to be checked!
-      return (sigma**2 - 2*np.log(trials))**0.5
+    # correct a sigmal value for a trials factor
+    if sigma < 20:
+        p = sigma2sig(sigma)*trials
+        if p >= 1: return 0
+        return sig2sigma(p)
+    else:
+        # use an asymptotic expansion -- this needs to be checked!
+        return (sigma**2 - 2*np.log(trials))**0.5
 
 
 def z2m(phases,m=2):
     """ Return the Z^2_m test for each harmonic up to the specified m.
-        See de Jager et al. 1989 for definition.    
+        See de Jager et al. 1989 for definition.
     """
 
     phases = np.asarray(phases)*TWOPI #phase in radians
@@ -115,30 +115,30 @@ def z2m(phases,m=2):
 
     else:
 
-        s = (np.asarray([(np.cos(k*phases)).sum() for k in xrange(1,m+1)]))**2 +\
-            (np.asarray([(np.sin(k*phases)).sum() for k in xrange(1,m+1)]))**2
+        s = (np.asarray([(np.cos(k*phases)).sum() for k in range(1,m+1)]))**2 +\
+            (np.asarray([(np.sin(k*phases)).sum() for k in range(1,m+1)]))**2
 
     return (2./n)*np.cumsum(s)
 
 def z2mw(phases,weights,m=2):
-   """ Return the Z^2_m test for each harmonic up to the specified m.
+    """ Return the Z^2_m test for each harmonic up to the specified m.
 
-       The user provides a list of weights.  In the case that they are
-       well-distributed or assumed to be fixed, the CLT applies and the
-       statistic remains calibrated.  Nice!
-    """
+        The user provides a list of weights.  In the case that they are
+        well-distributed or assumed to be fixed, the CLT applies and the
+        statistic remains calibrated.  Nice!
+     """
 
-   phases = np.asarray(phases)*(2*np.pi) #phase in radians
+    phases = np.asarray(phases)*(2*np.pi) #phase in radians
 
-   s = (np.asarray([(np.cos(k*phases)*weights).sum() for k in xrange(1,m+1)]))**2 +\
-       (np.asarray([(np.sin(k*phases)*weights).sum() for k in xrange(1,m+1)]))**2
+    s = (np.asarray([(np.cos(k*phases)*weights).sum() for k in range(1,m+1)]))**2 +\
+        (np.asarray([(np.sin(k*phases)*weights).sum() for k in range(1,m+1)]))**2
 
-   return np.cumsum(s) * (2./(weights**2).sum())
+    return np.cumsum(s) * (2./(weights**2).sum())
 
 def sf_z2m(ts,m=2):
     """ Return the survival function (chance probability) according to the
         asymptotic calibration for the Z^2_m test.
-        
+
         args
         ----
         ts      result of the Z^2_m test
@@ -147,20 +147,20 @@ def sf_z2m(ts,m=2):
     return chi2.sf(ts,2*m)
 
 def best_m(phases,weights=None,m=100):
-    z = z2mw(phases,np.ones_like(phases) if weights is None else weights,m=m) 
+    z = z2mw(phases,np.ones_like(phases) if weights is None else weights,m=m)
     return np.arange(1,m+1)[np.argmax(z-4*np.arange(0,m))]
 
 def em_four(phases,m=2,weights=None):
     """ Return the empirical Fourier coefficients up to the mth harmonic.
         These are derived from the empirical trignometric moments."""
-   
+
     phases = np.asarray(phases)*TWOPI #phase in radians
 
     n = len(phases) if weights is None else weights.sum()
     weights = 1. if weights is None else weights
 
-    aks = (1./n)*np.asarray([(weights*np.cos(k*phases)).sum() for k in xrange(1,m+1)])
-    bks = (1./n)*np.asarray([(weights*np.sin(k*phases)).sum() for k in xrange(1,m+1)])
+    aks = (1./n)*np.asarray([(weights*np.cos(k*phases)).sum() for k in range(1,m+1)])
+    bks = (1./n)*np.asarray([(weights*np.sin(k*phases)).sum() for k in range(1,m+1)])
 
     return aks,bks
 
@@ -172,7 +172,7 @@ def em_lc(coeffs,dom):
 
     aks,bks = coeffs
     rval = np.ones_like(dom)
-    for i in xrange(1,len(aks)+1):
+    for i in range(1,len(aks)+1):
         rval += 2*(aks[i-1]*np.cos(i*dom) + bks[i-1]*np.sin(i*dom))
     return rval
 
@@ -184,8 +184,8 @@ def hm(phases,m=20,c=4):
     """
     phases = np.asarray(phases)*(2*np.pi) #phase in radians
 
-    s = (np.asarray([(np.cos(k*phases)).sum() for k in xrange(1,m+1)]))**2 +\
-        (np.asarray([(np.sin(k*phases)).sum() for k in xrange(1,m+1)]))**2
+    s = (np.asarray([(np.cos(k*phases)).sum() for k in range(1,m+1)]))**2 +\
+        (np.asarray([(np.sin(k*phases)).sum() for k in range(1,m+1)]))**2
 
     return ((2./len(phases))*np.cumsum(s) - c*np.arange(0,m)).max()
 
@@ -198,8 +198,8 @@ def hmw(phases,weights,m=20,c=4):
 
     phases = np.asarray(phases)*(2*np.pi) #phase in radians
 
-    s = (np.asarray([(weights*np.cos(k*phases)).sum() for k in xrange(1,m+1)]))**2 +\
-        (np.asarray([(weights*np.sin(k*phases)).sum() for k in xrange(1,m+1)]))**2
+    s = (np.asarray([(weights*np.cos(k*phases)).sum() for k in range(1,m+1)]))**2 +\
+        (np.asarray([(weights*np.sin(k*phases)).sum() for k in range(1,m+1)]))**2
 
     return ( (2./(weights**2).sum()) * np.cumsum(s) - c*np.arange(0,m) ).max()
 
@@ -219,10 +219,10 @@ def sf_hm(h,m=20,c=4,logprob=False):
     from numpy import exp,arange,log,empty
     from scipy.special import gamma
     fact = lambda x: gamma(x+1)
-               
+
     # first, calculate the integrals of unity for all needed orders
     ints = empty(m)
-    for i in xrange(m):
+    for i in range(m):
         sv = i - arange(0,i) # summation vector
         ints[i]  = exp(i*log(h+i*c)-log(fact(i)))
         ints[i] -= (ints[:i]*exp(sv*log(sv*c)-log(fact(sv)))).sum()
@@ -266,6 +266,6 @@ def sf_stackedh(k,h,l=0.398405):
     fact = lambda x: gamma(x+1)
     p = 0
     c = l*h
-    for i in xrange(k):
+    for i in range(k):
         p += c**i/fact(i)
     return p*np.exp(-c)

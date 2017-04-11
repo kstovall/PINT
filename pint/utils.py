@@ -11,6 +11,11 @@ import astropy.units as u
 from astropy import log
 from .str2ld import str2ldarr1
 import re
+try:
+    maketrans = ''.maketrans
+except AttributeError:
+    # fallback for Python 2
+    from string import maketrans
 
 # Define prefix parameter pattern
 pp1 = re.compile(r'([a-zA-Z0-9]+_*)(\d+)')  # For the prefix like DMXR1_3
@@ -26,6 +31,9 @@ class PosVel(object):
     that are numpy arrays of floats (and can have attached astropy
     units).  The 'pos' and 'vel' params are 3-vectors of the positions
     and velocities respectively.
+
+    The coordinates are generally assumed to be aligned with ICRF (J2000),
+    i.e. they are in an intertial, not earth-rotating frame
 
     The 'obj' and 'origin' components are strings that can optionally
     be used to specify names for endpoints of the vectors.  If present,
@@ -89,15 +97,6 @@ class PosVel(object):
         else:
             return str(self.pos)+", "+str(self.vel)
 
-
-def compute_bats(tt, m):
-    '''Compute barycentric arrival times. This is the MJD of the TOA converted
-    to TDB, with the delay terms from the model applied (Solar System and
-    dispersion delays). The result is MJD(TDB) at infinite frequency.
-    Inputs are tt: TOAs table and m (model object)'''
-    return tt['tdbld'] - m.delay(tt)/86400.0
-
-
 def fortran_float(x):
     """Convert Fortran-format floating-point strings.
 
@@ -107,7 +106,7 @@ def fortran_float(x):
     """
     try:
         # First treat it as a string, wih d->e
-        return float(x.translate(string.maketrans('Dd', 'ee')))
+        return float(x.translate(maketrans('Dd', 'ee')))
     except AttributeError:
         # If that didn't work it may already be a numeric type
         return float(x)
@@ -117,7 +116,7 @@ def time_from_mjd_string(s, scale='utc'):
     """Returns an astropy Time object generated from a MJD string input."""
     ss = s.lower()
     if "e" in ss or "d" in ss:
-        ss = ss.translate(string.maketrans("d", "e"))
+        ss = ss.translate(maketrans("d", "e"))
         num, expon = ss.split("e")
         expon = int(expon)
         if expon < 0:
@@ -138,7 +137,8 @@ def time_from_mjd_string(s, scale='utc'):
         imjd_s, fmjd_s = mjd_s
         imjd = int(imjd_s)
         fmjd = float("0." + fmjd_s)
-    return astropy.time.Time(imjd, fmjd, scale=scale, format='mjd',
+
+    return astropy.time.Time(imjd, fmjd, scale=scale, format='pulsar_mjd',
                              precision=9)
 
 
@@ -266,10 +266,10 @@ def check_all_partials(f, args, delta=1e-6, atol=1e-4, rtol=1e-4):
         #print jac
         #print njac
         d = np.abs(jac-njac)/(atol+rtol*np.abs(njac))
-        print "fail fraction:", np.sum(d > 1)/float(np.sum(d >= 0))
+        print("fail fraction:", np.sum(d > 1)/float(np.sum(d >= 0)))
         worst_ix = np.unravel_index(np.argmax(d.reshape((-1,))), d.shape)
-        print "max fail:", np.amax(d), "at", worst_ix
-        print "jac there:", jac[worst_ix], "njac there:", njac[worst_ix]
+        print("max fail:", np.amax(d), "at", worst_ix)
+        print("jac there:", jac[worst_ix], "njac there:", njac[worst_ix])
         raise
 
 
@@ -317,8 +317,8 @@ def ddouble2ldouble(t1, t2, format='jd'):
 def str2longdouble(str_data):
     """Return a numpy long double scalar from the input string, using strtold()
     """
-    input_str = str_data.translate(string.maketrans('Dd', 'ee'))
-    return str2ldarr1(input_str)[0]
+    input_str = str_data.translate(maketrans('Dd', 'ee'))
+    return str2ldarr1(input_str.encode())[0]
 
 
 def split_prefixed_name(name):
@@ -380,6 +380,23 @@ def taylor_horner(x, coeffs):
         fact -= 1.0
     return result
 
+
+def taylor_horner_deriv(x, coeffs):
+    """Evaluate a Taylor series of coefficients at x via the Horner scheme.
+    For example, if we want: 3/1! + 4*x/2! + 12*x^2/3! with
+    x evaluated at 2.0, we would do:
+    In [1]: taylor_horner_deriv(2.0, [10, 3, 4, 12])
+    Out[1]: 15.0
+    """
+    result = 0.0
+    fact = float(len(coeffs))
+    der_coeff = float(len(coeffs)) - 1
+    for coeff in coeffs[::-1]:
+        result = result * x / fact + coeff * der_coeff
+        fact -= 1.0
+        der_coeff -= 1.0
+    result = (result)/x
+    return result
 
 def is_number(s):
     """Check if it is a number string.
